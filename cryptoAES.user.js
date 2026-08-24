@@ -8,6 +8,9 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @run-at       document-start
+// @updateURL   https://raw.githubusercontent.com/wongzeonsing/cryptoAES/main/cryptoAES.user.js
+// @downloadURL https://raw.githubusercontent.com/wongzeonsing/cryptoAES/main/cryptoAES.user.js
+// @version     0.41
 // ==/UserScript==
 
 (function() {
