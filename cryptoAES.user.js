@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AES 解密响应字段
 // @namespace    http://tampermonkey.net/
-// @version      0.41
+// @version      2026.08.24
 // @description  解密接口返回值并打印，支持自定义域名/密钥/字段路径
 // @match        *://*/*
 // @grant        GM_getValue
@@ -10,7 +10,7 @@
 // @run-at       document-start
 // @updateURL   https://raw.githubusercontent.com/wongzeonsing/cryptoAES/main/cryptoAES.user.js
 // @downloadURL https://raw.githubusercontent.com/wongzeonsing/cryptoAES/main/cryptoAES.user.js
-// @version     0.41
+// @version     2026.08.24
 // ==/UserScript==
 
 (function() {
