@@ -184,7 +184,7 @@
         '<label>AES 密钥</label>' +
         '<input type="text" placeholder="16/24/32 位密钥" />' +
         '<label>解析字段路径</label>' +
-        '<input type="text" placeholder="result_info.encrypt" />' +
+        '<input type="text" placeholder="a.b.c" />' +
         '<button type="button">保存</button>' +
         '<div class="hint"></div>';
       (document.body || document.documentElement).appendChild(panel);
