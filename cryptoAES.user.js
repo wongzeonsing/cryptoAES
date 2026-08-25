@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AES 解密响应字段
 // @namespace    http://tampermonkey.net/
-// @version      2026.08.26
+// @version      2026.08.27
 // @description  自动拦截并解密接口请求与返回值，支持 CBC/ECB 模式、IV、多规则及自定义字段路径，完全兼容油猴与 Stay
 // @match        *://*/*
 // @grant        GM_getValue
@@ -42,7 +42,6 @@
   function loadRules() {
     var rules = storage.get('rules', null);
     if (!rules || !Array.isArray(rules) || rules.length === 0) {
-      // 检查旧版配置进行向下兼容迁移
       var legacyKeywords = storage.get('urlKeywords', '');
       var legacyKey = storage.get('aesKey', '');
       var legacyField = storage.get('aesField', '');
@@ -189,7 +188,12 @@
 
       var Utf8 = C_enc.Utf8 = {
         stringify: function (wordArray) {
-          try { return decodeURIComponent(escape(Latin1.stringify(wordArray))); } catch (e) { return Latin1.stringify(wordArray); }
+          try {
+            return decodeURIComponent(escape(Latin1.stringify(wordArray)));
+          } catch (e) {
+            // 解码失败说明密文或密钥错误，返回空字符串防止产生乱码
+            return '';
+          }
         },
         parse: function (utf8Str) { return Latin1.parse(unescape(encodeURIComponent(utf8Str))); }
       };
@@ -528,7 +532,7 @@
 
     function byPath(o, p) {
       if (!p || !o) return undefined;
-      var parts = p.replace(/\[(\w+)\]/g, '.$1').replace(/^\./, '').split('.');
+      var parts = p.trim().replace(/\[(\w+)\]/g, '.$1').replace(/^\./, '').split('.');
       return parts.reduce(function(a, k) { return (a == null) ? undefined : a[k]; }, o);
     }
 
@@ -536,34 +540,74 @@
       try { return JSON.parse(str); } catch(e) { return null; }
     }
 
+    // 校验解密明文是否合法（杜绝乱码和控制字符）
+    function isValidPlaintext(str) {
+      if (!str || typeof str !== 'string') return false;
+      // 包含乱码替换符或大量不可见控制字符时判定无效
+      if (str.indexOf('\uFFFD') !== -1) return false;
+      var controlCharCount = 0;
+      for (var i = 0; i < str.length; i++) {
+        var code = str.charCodeAt(i);
+        // 控制字符 (0-8, 11-12, 14-31, 127)
+        if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31) || code === 127) {
+          controlCharCount++;
+        }
+      }
+      return controlCharCount === 0;
+    }
+
+    // 检查是否可能为密文格式 (Base64 或 Hex，且长度>=16)
+    function isLikelyCiphertext(str) {
+      if (!str || typeof str !== 'string') return false;
+      var clean = str.replace(/[\r\n\s]/g, '');
+      if (clean.length < 16) return false;
+      return /^[A-Za-z0-9+/=]+$/.test(clean) || /^[0-9a-fA-F]+$/.test(clean);
+    }
+
     function handleDecryptAndLog(rule, type, url, rawData) {
       if (!rawData || typeof rawData !== 'string') return;
-      var fieldPath = (type === 'REQ') ? rule.reqField : rule.resField;
+      var fieldConfig = (type === 'REQ') ? (rule.reqField || '') : (rule.resField || '');
       var key = rule.key, iv = rule.iv, mode = rule.mode || 'ECB';
-      var cipher = null;
 
+      var ciphersToTry = [];
       var json = tryParseJSON(rawData);
-      if (json && fieldPath) {
-        cipher = byPath(json, fieldPath);
-      } else if (!fieldPath) {
-        if (!json) cipher = rawData.trim();
+
+      if (json && fieldConfig.trim()) {
+        // 支持逗号分隔的多个候选路径，如 "result_info.encrypt, result_info"
+        var paths = fieldConfig.split(',');
+        for (var p = 0; p < paths.length; p++) {
+          var path = paths[p].trim();
+          if (!path) continue;
+          var val = byPath(json, path);
+          if (val && typeof val === 'string' && isLikelyCiphertext(val)) {
+            ciphersToTry.push({ path: path, cipher: val });
+          }
+        }
+      } else if (!fieldConfig.trim()) {
+        // 用户明确留空字段配置时，且非 JSON，才尝试整包解密
+        if (!json && isLikelyCiphertext(rawData.trim())) {
+          ciphersToTry.push({ path: '(整包)', cipher: rawData.trim() });
+        }
       }
 
-      if (cipher && typeof cipher === 'string') {
+      if (ciphersToTry.length === 0) return;
+
+      for (var c = 0; c < ciphersToTry.length; c++) {
+        var item = ciphersToTry[c];
         try {
-          var decryptedStr = doDecrypt(cipher, key, iv, mode);
-          if (decryptedStr) {
+          var decryptedStr = doDecrypt(item.cipher, key, iv, mode);
+          if (decryptedStr && isValidPlaintext(decryptedStr)) {
             var parsed = tryParseJSON(decryptedStr) || decryptedStr;
             var tag = type === 'REQ' ? '⬆️ [AES 请求体解密]' : '⬇️ [AES 响应体解密]';
             console.log(
-              '%c' + tag + ' %c' + (rule.name ? '[' + rule.name + '] ' : '') + url,
+              '%c' + tag + ' %c' + (rule.name ? '[' + rule.name + '] ' : '') + url + (item.path ? ' (字段: ' + item.path + ')' : ''),
               'color:#fff;background:#2e7d32;padding:2px 6px;border-radius:3px;font-weight:bold;',
               'color:#1565c0;font-weight:bold;',
               '\n\n⭕️ 解密结果：\n', parsed
             );
           }
         } catch(e) {
-          console.warn('[AES] ❎ 解密异常:', url, e);
+          // 解密异常静默处理，不输出乱码
         }
       }
     }
@@ -742,9 +786,9 @@
           '</div>' +
           '<label>AES 密钥 (Key)</label>' +
           '<input type="text" class="inp-key" placeholder="16/24/32 位密钥" value="' + (rule.key || '') + '" />' +
-          '<label>响应解密字段 (留空则全包解密)</label>' +
-          '<input type="text" class="inp-res" placeholder="如：data.payload 或 data.list[0].cipher" value="' + (rule.resField || '') + '" />' +
-          '<label>请求体解密字段 (可选)</label>' +
+          '<label>响应解密字段 (多字段用逗号分隔，留空则全包解密)</label>' +
+          '<input type="text" class="inp-res" placeholder="如：result_info.encrypt, result_info" value="' + (rule.resField || '') + '" />' +
+          '<label>请求体解密字段 (可选，多字段用逗号分隔)</label>' +
           '<input type="text" class="inp-req" placeholder="如：encryptData (拦截 POST 发包)" value="' + (rule.reqField || '') + '" />' +
           '<div class="btn-group">' +
             '<button type="button" class="btn-save">保存生效</button>' +
@@ -758,7 +802,6 @@
       function bindEvents() {
         panel.querySelector('.close').onclick = function() { panel.remove(); };
 
-        // 标签切换
         var tabs = panel.querySelectorAll('.tab');
         tabs.forEach(function(t) {
           t.onclick = function() {
@@ -767,7 +810,6 @@
           };
         });
 
-        // 添加规则
         var addBtn = panel.querySelector('.tab-add');
         if (addBtn) {
           addBtn.onclick = function() {
@@ -786,14 +828,12 @@
           };
         }
 
-        // 模式切换显示/隐藏 IV
         var modeSelect = panel.querySelector('.inp-mode');
         var ivBox = panel.querySelector('.iv-box');
         modeSelect.onchange = function() {
           ivBox.style.display = this.value === 'CBC' ? 'block' : 'none';
         };
 
-        // 删除规则
         var delBtn = panel.querySelector('.btn-del');
         if (delBtn) {
           delBtn.onclick = function() {
@@ -806,7 +846,6 @@
           };
         }
 
-        // 保存规则
         var saveBtn = panel.querySelector('.btn-save');
         var hint = panel.querySelector('.hint');
         saveBtn.onclick = function() {
@@ -844,7 +883,6 @@
       (document.body || document.documentElement).appendChild(panel);
     }
 
-    // 菜单命令注册
     if (typeof GM_registerMenuCommand !== 'undefined') {
       GM_registerMenuCommand('🔑 设置 AES 解密配置', function() {
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', buildPanel);
@@ -852,7 +890,6 @@
       });
     }
 
-    // 控制台事件监听 (支持页面直接调用 window.aesConfig())
     window.addEventListener('__OPEN_AES_CONFIG__', function() {
       buildPanel();
     });
