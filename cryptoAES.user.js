@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         AES 解密响应与请求字段
+// @name         AES 解密响应字段
 // @namespace    http://tampermonkey.net/
 // @version      2026.08.25
 // @description  自动拦截并解密接口请求与返回值，支持 CBC/ECB 模式、IV、多规则及自定义字段路径，完全兼容油猴与 Stay
